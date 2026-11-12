@@ -117,7 +117,9 @@ jobs:
                 ;;
             esac
           else
-            check_args=(--tools auto)
+            # Keep the push run focused on Guard itself: this example has no lint,
+            # typecheck or build scripts. Guard's own hosted demo does the same.
+            check_args=(--no-project-checks --tools off)
           fi
           if [ -n "$POLICY_BASE" ]; then
             pnpm exec codapult-guard verify "${check_args[@]}" --policy-base "$POLICY_BASE" --attestation-out "$GUARD_STATEMENT_FILE" --json > "$GUARD_RESULT_FILE"

@@ -1,8 +1,10 @@
-This repository includes two workflow files copied unchanged from
+This repository includes two workflow files copied from
 codapult/codapult-guard v0.14.1 (commit 455570623086c091a90679af9a58a1a5bc213758):
 
-- .github/workflows/codapult-guard.yml (from docs/guard-ci.yml)
-- .github/workflows/guard-trusted-pr-attestation.yml (from docs/guard-trusted-pr-attestation.yml)
+- .github/workflows/codapult-guard.yml (from docs/guard-ci.yml; the push run skips
+  project checks, as in Guard's own hosted demo)
+- .github/workflows/guard-trusted-pr-attestation.yml (from docs/guard-trusted-pr-attestation.yml,
+  unchanged)
 
 They are used under the MIT License:
 
