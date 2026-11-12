@@ -4,3 +4,8 @@ export function discounted(pence, percent) {
   if (percent < 0 || percent > 100) throw new RangeError("percent must be between 0 and 100");
   return Math.round(pence * (1 - percent / 100));
 }
+
+/** VAT-inclusive price in pence at the given rate, rounded to the penny. */
+export function withVat(pence, ratePercent = 20) {
+  return Math.round(pence * (1 + ratePercent / 100));
+}
