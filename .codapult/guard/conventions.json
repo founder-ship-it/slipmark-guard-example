@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "generatedBy": "codapult-guard init",
+  "scripts": {
+    "test": "node --test src/*.test.js"
+  },
+  "configFiles": [
+    "package.json"
+  ],
+  "testFiles": [
+    "src/price.test.js"
+  ],
+  "sourceExtensions": [
+    ".js"
+  ],
+  "directives": [],
+  "routeHandlers": [],
+  "barrelFiles": []
+}

@@ -1,0 +1,15 @@
+{
+  "schema": "slipmark/policy@1",
+  "bundle": {
+    "require": [
+      {
+        "predicateType": "https://github.com/codapult/codapult-guard/blob/main/docs/attestations/guard-verification-v1.md",
+        "signers": ["https://github.com/founder-ship-it/slipmark-guard-example/.github/workflows/guard-trusted-pr-attestation.yml@refs/heads/main"]
+      },
+      {
+        "predicateType": "https://github.com/founder-ship-it/Slipmark/attestation/v1",
+        "signers": ["https://github.com/founder-ship-it/slipmark-guard-example/.github/workflows/slipmark-trusted-pr.yml@refs/heads/main"]
+      }
+    ]
+  }
+}

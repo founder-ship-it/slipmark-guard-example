@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "tools": "auto",
+  "tooling": {},
+  "completionGate": {
+    "enabled": true,
+    "maxIterations": 3,
+    "projectChecks": true,
+    "checks": [
+      "lint",
+      "typecheck",
+      "test",
+      "build"
+    ],
+    "requiredStages": [
+      "architecture-policy"
+    ]
+  }
+}

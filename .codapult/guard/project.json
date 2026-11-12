@@ -1,0 +1,201 @@
+{
+  "version": 1,
+  "project": {
+    "name": "slipmark-guard-example",
+    "frameworks": [],
+    "scripts": {
+      "test": "node --test src/*.test.js"
+    },
+    "dependencies": {},
+    "devDependencies": {},
+    "workspacePackages": []
+  },
+  "files": [
+    {
+      "path": "package.json",
+      "kind": "config",
+      "bytes": 281
+    },
+    {
+      "path": "src/price.js",
+      "kind": "source",
+      "bytes": 380
+    },
+    {
+      "path": "src/price.test.js",
+      "kind": "test",
+      "bytes": 353
+    }
+  ],
+  "modules": [
+    {
+      "path": "src/price.js",
+      "contentHash": "b0e6b05133cdb8013a58482fae08eb40df22e7be4c3534a8ed3a2f500ed47798",
+      "imports": [],
+      "importedSymbols": [],
+      "exports": [],
+      "calls": [
+        "Math.round",
+        "Number.isInteger"
+      ],
+      "resolvedImports": [],
+      "resolvedImportMap": {},
+      "dynamicImports": [],
+      "declarations": {
+        "classes": 0,
+        "functions": 1,
+        "interfaces": 0,
+        "types": 0,
+        "variables": 0
+      },
+      "directives": []
+    },
+    {
+      "path": "src/price.test.js",
+      "contentHash": "b7232b710ab6b8fa9dce4e9bd9a0ed993a31914b1bfaa6da2676bbf56b4a2e24",
+      "imports": [
+        "./price.js",
+        "node:assert/strict",
+        "node:test"
+      ],
+      "importedSymbols": [
+        "assert",
+        "discounted",
+        "test"
+      ],
+      "exports": [],
+      "calls": [
+        "assert.equal",
+        "assert.throws",
+        "discounted",
+        "test"
+      ],
+      "resolvedImports": [],
+      "resolvedImportMap": {},
+      "dynamicImports": [],
+      "declarations": {
+        "classes": 0,
+        "functions": 0,
+        "interfaces": 0,
+        "types": 0,
+        "variables": 0
+      },
+      "directives": []
+    }
+  ],
+  "configs": [
+    "package.json"
+  ],
+  "schemas": [],
+  "tests": {
+    "files": [
+      "src/price.test.js"
+    ],
+    "scripts": {
+      "test": "node --test src/*.test.js"
+    }
+  },
+  "capabilities": {
+    "runtime": {
+      "status": "observed",
+      "confidence": "high",
+      "packages": [],
+      "files": [
+        "package.json"
+      ],
+      "imports": [],
+      "evidence": [
+        "package metadata and runtime imports"
+      ]
+    },
+    "testing": {
+      "status": "observed",
+      "confidence": "medium",
+      "packages": [],
+      "files": [
+        "src/price.test.js"
+      ],
+      "imports": [],
+      "evidence": [
+        "file pattern: (?:^|\\/)(?:__tests__|tests?|e2e)(?:\\/|[^/]*$)|\\.(?:test|spec)\\.",
+        "test runner and test layout conventions"
+      ]
+    },
+    "dependencies": {
+      "status": "observed",
+      "confidence": "high",
+      "packages": [],
+      "files": [
+        "package.json"
+      ],
+      "imports": [],
+      "evidence": [
+        "package manifest and lockfile metadata"
+      ]
+    }
+  },
+  "git": {
+    "repository": true,
+    "branch": "main",
+    "dirty": true,
+    "changedFiles": [
+      ".codapult/guard/.state.lock"
+    ],
+    "status": [
+      "?? .codapult/"
+    ],
+    "diffStat": "",
+    "history": [
+      {
+        "hash": "eb3e9786a80d6e9adcbc095e3a9cc9e315de1543",
+        "date": "2026-11-12T09:35:28+00:00",
+        "subject": "init"
+      }
+    ]
+  },
+  "patterns": {
+    "clientComponents": [],
+    "serverActions": [],
+    "routeHandlers": [],
+    "routeDetails": [],
+    "barrelFiles": [],
+    "importGraphEdges": 3
+  },
+  "insights": {
+    "layers": {
+      "other": [
+        "src/price.js"
+      ],
+      "tests": [
+        "src/price.test.js"
+      ]
+    },
+    "cycles": [],
+    "importHotspots": [
+      {
+        "module": "node:assert/strict",
+        "count": 1
+      },
+      {
+        "module": "node:test",
+        "count": 1
+      }
+    ],
+    "boundaries": [],
+    "layerEdges": [
+      {
+        "from": "tests",
+        "to": "other",
+        "count": 1
+      }
+    ],
+    "dependencyEdges": [
+      {
+        "from": "src/price.test.js",
+        "to": "src/price.js"
+      }
+    ],
+    "impactPaths": [],
+    "envReferences": []
+  }
+}

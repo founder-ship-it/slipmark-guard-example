@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "generatedBy": "codapult-guard init",
+  "frameworks": [],
+  "workspacePackages": [],
+  "capabilities": {
+    "runtime": {
+      "status": "observed",
+      "confidence": "high",
+      "packages": [],
+      "files": [
+        "package.json"
+      ],
+      "imports": [],
+      "evidence": [
+        "package metadata and runtime imports"
+      ]
+    },
+    "testing": {
+      "status": "observed",
+      "confidence": "medium",
+      "packages": [],
+      "files": [
+        "src/price.test.js"
+      ],
+      "imports": [],
+      "evidence": [
+        "file pattern: (?:^|\\/)(?:__tests__|tests?|e2e)(?:\\/|[^/]*$)|\\.(?:test|spec)\\.",
+        "test runner and test layout conventions"
+      ]
+    },
+    "dependencies": {
+      "status": "observed",
+      "confidence": "high",
+      "packages": [],
+      "files": [
+        "package.json"
+      ],
+      "imports": [],
+      "evidence": [
+        "package manifest and lockfile metadata"
+      ]
+    }
+  },
+  "map": {
+    "layers": {
+      "other": [
+        "src/price.js"
+      ],
+      "tests": [
+        "src/price.test.js"
+      ]
+    },
+    "edges": [
+      {
+        "from": "tests",
+        "to": "other",
+        "count": 1
+      }
+    ]
+  },
+  "dependencyGraph": {
+    "edges": [
+      {
+        "from": "src/price.test.js",
+        "to": "src/price.js"
+      }
+    ]
+  },
+  "layers": {
+    "other": [
+      "src/price.js"
+    ],
+    "tests": [
+      "src/price.test.js"
+    ]
+  },
+  "boundaries": [],
+  "persistence": {
+    "packages": [],
+    "schemaFiles": []
+  },
+  "authorization": {
+    "implementationModules": []
+  },
+  "billing": {
+    "providerCandidates": []
+  },
+  "routes": [],
+  "environment": {
+    "references": []
+  },
+  "cycles": [],
+  "packs": [],
+  "packAssessments": []
+}

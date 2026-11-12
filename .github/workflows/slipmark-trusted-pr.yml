@@ -1,0 +1,167 @@
+name: Slipmark Trusted PR Review and Bundle Gate
+
+# Runs after Guard's trusted verification finishes on a pull request.
+# 1. Reviews the PR head with a reviewer script taken from main (it reads files, never runs them).
+# 2. Signs that verdict as an in-toto Statement, with this workflow's identity on main.
+# 3. Puts it in one Bundle with Guard's signed Statement and checks the Bundle with
+#    `slipmark verify-bundle`, under the policy on the PR's base commit.
+# 4. Reports the result on the PR head as the "Slipmark bundle gate" status.
+#
+# workflow_run workflows are loaded from the default branch, so a PR can't change this file
+# for its own run. Nothing here executes code from the PR.
+
+on:
+  workflow_run:
+    workflows: ["Guard Trusted PR Verification"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  review-and-gate:
+    # Same-repository PRs only: GitHub gives no PR context, and Guard signs nothing, for forks.
+    if: github.event.workflow_run.event == 'pull_request_target' && github.event.workflow_run.pull_requests[0] != null
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      statuses: write
+    env:
+      SLIPMARK_VERSION: "0.7.0"
+      HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+      BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+    steps:
+      - name: Mark the gate as running
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state=pending \
+            -f context="Slipmark bundle gate" -f description="Reviewing and checking the Bundle" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null
+
+      - name: Check out the reviewer from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: trusted
+          persist-credentials: false
+
+      - name: Check out the PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/pull/${{ env.PR_NUMBER }}/head
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm the checkout is the PR head, and fetch its base
+        working-directory: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
+            echo "Checked out $(git rev-parse HEAD), expected PR head $HEAD_SHA" >&2
+            exit 1
+          fi
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          unset GH_TOKEN
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader GIT_CONFIG_VALUE_0="$auth_header" \
+            git fetch --no-tags origin "$BASE_SHA"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Install the pinned Slipmark release, away from the PR
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir slipmark-tool && cd slipmark-tool
+          npm install --no-save --ignore-scripts --no-audit --no-fund "slipmark@$SLIPMARK_VERSION"
+          echo "SLIPMARK=$RUNNER_TEMP/slipmark-tool/node_modules/slipmark/dist/src/cli.js" >> "$GITHUB_ENV"
+
+      - name: Review the changed source files
+        id: review
+        working-directory: pr
+        run: |
+          mapfile -t files < <(git diff --name-only --diff-filter=AM "$BASE_SHA" "$HEAD_SHA" -- 'src/*.js' ':!src/*.test.js')
+          if [ ${#files[@]} -eq 0 ]; then
+            mapfile -t files < <(git ls-files 'src/*.js' ':!src/*.test.js')
+          fi
+          node "$GITHUB_WORKSPACE/trusted/scripts/doc-review.mjs" . "${files[@]}" | tee "$RUNNER_TEMP/review.txt"
+          verdict=$(sed -n 's/^verdict=//p' "$RUNNER_TEMP/review.txt")
+          {
+            echo "verdict=$verdict"
+            echo "files<<EOF"
+            printf '%s\n' "${files[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Sign the verdict as an in-toto Statement
+        working-directory: pr
+        env:
+          VERDICT: ${{ steps.review.outputs.verdict }}
+          FILES: ${{ steps.review.outputs.files }}
+        run: |
+          args=()
+          while IFS= read -r f; do [ -n "$f" ] && args+=(--subject "$f"); done <<< "$FILES"
+          node "$SLIPMARK" attest --by doc-review --kind tool --verdict "$VERDICT" "${args[@]}" \
+            --note "doc-review.mjs from main ($GITHUB_SHA) on PR #$PR_NUMBER at $HEAD_SHA" \
+            --sign-format intoto
+
+      - name: Download Guard's signed Statement
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: guard-trusted-pr-attestation
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/guard
+
+      - name: Build the combined Bundle
+        run: |
+          include=()
+          if [ -f "$RUNNER_TEMP/guard/guard-verification.sigstore.jsonl" ]; then
+            include=(--include "$RUNNER_TEMP/guard/guard-verification.sigstore.jsonl")
+          else
+            echo "::warning::Guard produced no signed Statement for this PR, so the gate will refuse."
+          fi
+          cd pr
+          node "$SLIPMARK" export-intoto --format sigstore "${include[@]}" --out "$RUNNER_TEMP/combined.sigstore.jsonl"
+
+      - name: Check the Bundle
+        id: gate
+        working-directory: pr
+        run: |
+          set +e
+          node "$SLIPMARK" verify-bundle "$RUNNER_TEMP/combined.sigstore.jsonl" \
+            --repo "$GITHUB_REPOSITORY" --head "$HEAD_SHA" --base "$BASE_SHA" \
+            --policy-from "$BASE_SHA" | tee "$RUNNER_TEMP/gate.txt"
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          { echo '## Slipmark bundle gate'; echo; echo '```'; cat "$RUNNER_TEMP/gate.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+
+      - name: Keep the combined Bundle
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: combined-bundle
+          path: ${{ runner.temp }}/combined.sigstore.jsonl
+          if-no-files-found: ignore
+
+      - name: Report the result on the PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ steps.gate.outputs.code }}
+        run: |
+          case "$CODE" in
+            0) state=success; desc="Guard and Slipmark verdicts both hold for this head" ;;
+            1) state=failure; desc="Refused: see the run summary" ;;
+            *) state=error; desc="The gate couldn't run: see the run log" ;;
+          esac
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" -f state="$state" \
+            -f context="Slipmark bundle gate" -f description="$desc" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null

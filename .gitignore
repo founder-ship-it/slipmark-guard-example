@@ -1,0 +1,5 @@
+node_modules/
+# Guard's local run history and cache
+.codapult/guard/history/
+.codapult/guard/state/
+.codapult/guard/cache.json

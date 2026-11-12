@@ -1,0 +1,344 @@
+name: Guard
+
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codapult-guard-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Architecture Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          # On pull requests, github.sha is the merge commit. This keeps the
+          # base project's Guard dependency and policy available while testing
+          # the proposed changes. Verify still reads policy from base.sha below.
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Validate exact merge-group candidate and base
+        if: github.event_name == 'merge_group'
+        env:
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          if ! [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] || ! [[ "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "Merge group is missing a valid head_sha or base_sha." >&2
+            exit 1
+          fi
+          actual_head=$(git rev-parse HEAD)
+          if [ "$actual_head" != "$HEAD_SHA" ] || [ "$GITHUB_SHA" != "$HEAD_SHA" ]; then
+            echo "Checked out $actual_head; expected merge-group head $HEAD_SHA (GITHUB_SHA=$GITHUB_SHA)." >&2
+            exit 1
+          fi
+          if ! git cat-file -e "$BASE_SHA^{commit}"; then
+            echo "Merge-group base commit $BASE_SHA is unavailable." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"; then
+            echo "Merge-group base $BASE_SHA is not an ancestor of candidate $HEAD_SHA." >&2
+            exit 1
+          fi
+
+      - name: Verify Guard runtime dependencies against base
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
+            diff_range="$BASE_SHA..HEAD"
+          else
+            diff_range="$BASE_SHA...HEAD"
+          fi
+          if ! git diff --quiet "$diff_range" -- \
+            package.json pnpm-lock.yaml package-lock.json npm-shrinkwrap.json yarn.lock bun.lock bun.lockb \
+            pnpm-workspace.yaml .npmrc .pnpmfile.cjs pnpmfile.cjs .yarnrc .yarnrc.yml .pnp.cjs .pnp.loader.mjs \
+            '**/package.json' '**/pnpm-lock.yaml' '**/package-lock.json' '**/npm-shrinkwrap.json' \
+            '**/yarn.lock' '**/bun.lock' '**/bun.lockb' '**/pnpm-workspace.yaml' \
+            '**/.npmrc' '**/.pnpmfile.cjs' '**/pnpmfile.cjs' '**/.yarnrc' '**/.yarnrc.yml' \
+            '**/.pnp.cjs' '**/.pnp.loader.mjs'; then
+            echo "Guard runtime dependency inputs changed; review and merge those changes separately before running Guard."
+            exit 1
+          fi
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
+            # Do not execute lifecycle scripts supplied by untrusted PR content.
+            pnpm install --frozen-lockfile --ignore-scripts
+          else
+            pnpm install --frozen-lockfile
+          fi
+
+      # Install @codapult/guard as a pinned dev dependency in the project first.
+      # Run `codapult-guard init` once locally and commit the generated Guard memory.
+      - name: Verify Guard and project checks
+        env:
+          POLICY_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          GUARD_POLICY_MODE: ${{ vars.CODAPULT_GUARD_POLICY_MODE || 'host-review' }}
+          GUARD_RESULT_FILE: ${{ runner.temp }}/guard-verification.json
+          GUARD_STATEMENT_FILE: ${{ runner.temp }}/guard-verification.intoto.json
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
+            # PR and merge-group candidate code are untrusted. Verify with the
+            # event's exact base policy; never execute project-owned scripts here.
+            case "$GUARD_POLICY_MODE" in
+              host-review)
+                check_args=(--no-project-checks --tools off)
+                ;;
+              strict)
+                check_args=(--no-project-checks --tools off --fail-on-policy-change --fail-on-protected-changes)
+                ;;
+              *)
+                echo "Unsupported CODAPULT_GUARD_POLICY_MODE: $GUARD_POLICY_MODE (expected host-review or strict)." >&2
+                exit 2
+                ;;
+            esac
+          else
+            check_args=(--tools auto)
+          fi
+          if [ -n "$POLICY_BASE" ]; then
+            pnpm exec codapult-guard verify "${check_args[@]}" --policy-base "$POLICY_BASE" --attestation-out "$GUARD_STATEMENT_FILE" --json > "$GUARD_RESULT_FILE"
+          else
+            pnpm exec codapult-guard verify "${check_args[@]}" --attestation-out "$GUARD_STATEMENT_FILE" --json > "$GUARD_RESULT_FILE"
+          fi
+
+      - name: Add Guard result to the workflow summary
+        if: always()
+        env:
+          GUARD_RESULT_FILE: ${{ runner.temp }}/guard-verification.json
+          GUARD_POLICY_MODE: ${{ vars.CODAPULT_GUARD_POLICY_MODE || 'host-review' }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const resultFile = process.env.GUARD_RESULT_FILE;
+          let resultContent;
+          try {
+            if (!resultFile) throw new Error('missing result file path');
+            resultContent = readFileSync(resultFile, 'utf8');
+          } catch {
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, '## Codapult Guard\n\n- Result: **incomplete** (verification did not produce a result file).\n');
+            process.exit(0);
+          }
+          if (resultContent.length === 0) {
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, '## Codapult Guard\n\n- Result: **incomplete** (verification did not produce a result file).\n');
+            process.exit(0);
+          }
+          let result;
+          try {
+            result = JSON.parse(resultContent);
+          } catch {
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, '## Codapult Guard\n\n- Result: **incomplete** (verification result was not valid JSON).\n');
+            process.exit(0);
+          }
+          const receipt = result.run?.receipt;
+          const receiptIsComplete = Boolean(
+            receipt &&
+              receipt.subject &&
+              Array.isArray(receipt.subject.changedFiles) &&
+              receipt.findings &&
+              Number.isFinite(receipt.findings.total) &&
+              Number.isFinite(receipt.findings.errors) &&
+              Number.isFinite(receipt.findings.warnings) &&
+              Array.isArray(receipt.contractIssues) &&
+              typeof receipt.tool?.version === 'string',
+          );
+          const guardVerdict = result.outcome === 'pass' && !receiptIsComplete ? 'incomplete' : result.outcome ?? 'unknown';
+          const code = (value) => `\`${String(value).replace(/[\u0000-\u001f\u007f`]/g, ' ')}\``;
+          const plain = (value) => String(value)
+            .replace(/[\u0000-\u001f\u007f]/g, ' ')
+            .replace(/[\\`*_{}\[\]()#+.!|>~-]/g, '\\$&');
+          const lines = [
+            '## Codapult Guard',
+            '',
+            `- Guard verdict: **${guardVerdict}**`,
+            `- Gate: \`${result.run?.gate ?? 'unknown'}\``,
+            `- Policy mode: \`${process.env.GUARD_POLICY_MODE ?? 'unknown'}\``,
+            `- Run: \`${result.run?.runId ?? 'unknown'}\``,
+          ];
+          if (receiptIsComplete) {
+            const incompleteChecks = Object.entries(receipt.checks ?? {})
+              .filter(([, check]) => check.status !== 'passed')
+              .map(([name, check]) => `${name}=${check.status}`);
+            const skippedStages = Object.entries(receipt.stages ?? {})
+              .filter(([, status]) => status === 'skipped')
+              .map(([name]) => name);
+            lines.push(
+              `- Commit: \`${receipt.subject.commit ?? 'unavailable'}\``,
+              `- Policy fingerprint: \`${receipt.policy?.fingerprint ?? 'unavailable'}\``,
+              `- Changed files: ${receipt.subject.changedFiles.length}`,
+              `- Findings: ${receipt.findings.total} (${receipt.findings.errors} errors, ${receipt.findings.warnings} warnings)`,
+              `- Contract issues: ${receipt.contractIssues.length}`,
+              `- Guard version: \`${receipt.tool.version}\``,
+              `- Required stages: ${(receipt.requiredStages ?? []).join(', ') || 'none configured'}`,
+            );
+            if (receipt.verificationScope) {
+              lines.push(`- Verification scope: ${receipt.verificationScope.complete && receipt.verificationScope.stable ? 'complete and stable' : 'incomplete or changed'} (${receipt.verificationScope.files.length} files, SHA-256 ${code(receipt.verificationScope.fingerprint)})`);
+            }
+            if (receipt.effectiveInvocation) {
+              lines.push(`- Effective invocation: ${code([receipt.effectiveInvocation.command, ...receipt.effectiveInvocation.args].join(' '))}`);
+            }
+            if ((receipt.incompleteStages ?? []).length > 0) {
+              lines.push(`- Incomplete required stages: ${receipt.incompleteStages.join(', ')}`);
+            }
+            if (incompleteChecks.length > 0) {
+              lines.push(`- Incomplete checks: ${incompleteChecks.join(', ')}`);
+            }
+            if (skippedStages.length > 0) {
+              lines.push(`- Skipped stages: ${skippedStages.join(', ')}`);
+            }
+            if (receipt.subject.baseRef) lines.push(`- Policy base: \`${receipt.subject.baseRef}\``);
+            if (receipt.ciIntegrity) {
+              lines.push(`- CI integrity: **${receipt.ciIntegrity.status}**`);
+              for (const workflow of receipt.ciIntegrity.workflows) {
+                lines.push(`- Workflow: ${code(workflow.path)} job ${code(workflow.job)} (${workflow.status}, base SHA ${code(workflow.baseDigest ?? 'unavailable')}, PR SHA ${code(workflow.digest ?? 'unavailable')})`);
+                if (workflow.actions.length > 0) lines.push(`  - Actions: ${workflow.actions.map(code).join(', ')}`);
+                for (const change of workflow.actionChanges ?? []) {
+                  lines.push(`  - Action refs changed: ${code(change.name)} (${code(change.base.join(', ') || 'none')} → ${code(change.current.join(', ') || 'none')})`);
+                }
+                for (const issue of workflow.issues) lines.push(`  - ${issue.code}: ${plain(issue.message)}`);
+              }
+            }
+          } else if (receipt) {
+            lines.push('- Receipt: **incomplete** (required summary fields are missing).');
+          }
+          const protectedChanges = result.policySurface?.changedPaths ?? [];
+          const suppressions = result.policySurface?.suppressionMarkers ?? [];
+          const policyChanged = result.policyChanged === true || receipt?.policy?.changed === true;
+          const ciIntegrity = result.ciIntegrity ?? receipt?.ciIntegrity;
+          const hostReviewRequired = policyChanged || protectedChanges.length > 0 || suppressions.length > 0 || ciIntegrity?.status === 'policy-weakened';
+          if (protectedChanges.length > 0 || suppressions.length > 0) {
+            lines.push('', '### Verification-sensitive changes', ...protectedChanges.map((path) => `- ${code(path)}`));
+            for (const change of result.policySurface?.changes ?? []) {
+              lines.push(`- ${change.kind} (${change.severity}): ${code(change.path)} matched ${code(change.pattern)}`);
+            }
+            lines.push(...suppressions.map((marker) => `- Inline suppression added: ${code(marker)}`));
+            lines.push('- Workflow integrity and required-check enforcement must be configured in repository settings.');
+          }
+          if (hostReviewRequired) {
+            if (policyChanged) lines.push('- Guard policy differs from the base revision.');
+            lines.push('- Host review: **required**. Guard evaluated the proposed code with policy from the base revision; this result does not approve the policy-sensitive changes.');
+          }
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
+          NODE
+
+      - name: Remove statement unless the candidate was verified without policy changes
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        env:
+          GUARD_RESULT_FILE: ${{ runner.temp }}/guard-verification.json
+          GUARD_STATEMENT_FILE: ${{ runner.temp }}/guard-verification.intoto.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, rmSync } from 'node:fs';
+          const statementFile = process.env.GUARD_STATEMENT_FILE;
+          const resultFile = process.env.GUARD_RESULT_FILE;
+          let result;
+          try {
+            if (!resultFile) throw new Error('missing result path');
+            result = JSON.parse(readFileSync(resultFile, 'utf8'));
+          } catch {
+            if (statementFile) rmSync(statementFile, { force: true });
+            process.exit(0);
+          }
+          const receipt = result.run?.receipt;
+          const policySurface = result.policySurface;
+          const ciIntegrity = result.ciIntegrity ?? receipt?.ciIntegrity;
+          const cleanBasePolicyVerdict =
+            result.outcome === 'pass' &&
+            result.policyChanged !== true &&
+            policySurface?.complete === true &&
+            Array.isArray(policySurface.changedPaths) &&
+            policySurface.changedPaths.length === 0 &&
+            Array.isArray(policySurface.suppressionMarkers) &&
+            policySurface.suppressionMarkers.length === 0 &&
+            ciIntegrity?.status !== 'policy-weakened' &&
+            receipt?.verificationScope?.complete === true &&
+            receipt?.verificationScope?.stable === true;
+          if (!cleanBasePolicyVerdict && statementFile) rmSync(statementFile, { force: true });
+          NODE
+
+      - name: Upload verification receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: codapult-guard-verification
+          path: |
+            ${{ runner.temp }}/guard-verification.json
+            ${{ runner.temp }}/guard-verification.intoto.json
+          if-no-files-found: ignore
+
+      # Keep .codapult/guard policy files behind the repository's protected
+      # review path. Guard applies the base policy above; CODEOWNERS or branch
+      # protection decides who may approve a policy change.
+      - name: Report policy files changed
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
+            diff_range="$BASE_SHA..HEAD"
+          else
+            diff_range="$BASE_SHA...HEAD"
+          fi
+          policy_files=$(git diff --name-only "$diff_range" -- .codapult/guard)
+          if [ -n "$policy_files" ]; then
+            echo "Guard policy files changed; require the configured CODEOWNERS/protected review:"
+            echo "$policy_files"
+          fi
+
+      - name: Prepare PR review packet
+        if: github.event_name == 'pull_request'
+        env:
+          GUARD_REVIEW_FILE: ${{ runner.temp }}/guard-review.json
+        run: pnpm exec codapult-guard review --base "${{ github.event.pull_request.base.sha }}" > "$GUARD_REVIEW_FILE"
+
+      - name: Upload PR review packet
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: codapult-guard-review
+          path: ${{ runner.temp }}/guard-review.json
+          if-no-files-found: ignore
+
+      - name: Export Guard findings as SARIF
+        if: always() && github.event_name != 'merge_group'
+        id: export-sarif
+        continue-on-error: true
+        env:
+          GUARD_SARIF_FILE: ${{ runner.temp }}/guard-results.sarif
+        run: |
+          set +e
+          pnpm exec codapult-guard check --changed --sarif > "$GUARD_SARIF_FILE"
+          status=$?
+          if [ -s "$GUARD_SARIF_FILE" ]; then
+            echo "sarif_exists=true" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+
+      - name: Upload Guard findings
+        if: always() && steps.export-sarif.outputs.sarif_exists == 'true'
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          sarif_file: ${{ runner.temp }}/guard-results.sarif

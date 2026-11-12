@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "generatedAt": "2026-11-12T09:35:40.032Z",
+  "findings": 0,
+  "projectFingerprint": "5eaaadf67bd599eaa3af2b2b42dc006dd5d1a61837aacf652b4713eb0347c92b",
+  "guardSchemaVersion": 1,
+  "purpose": "Initial Guard state; findings are suppressed unless they change fingerprint."
+}
